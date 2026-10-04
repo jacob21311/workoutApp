@@ -196,6 +196,7 @@ async function initCloud() {
       const entries = { ...(store.bw.entries || {}), ...(cbw?.entries || {}) };
       store.bw = { entries };
       if (Object.keys(entries).length !== Object.keys(cbw?.entries || {}).length) saveBw();
+      mergeSameDay();
     } else {
       const open = cur && store.workouts[cur.id] === cur ? cur : null;
       store.workouts = cw;
@@ -333,7 +334,9 @@ function suggestPart() {
   }
   return best;
 }
-const weekCount = (wk = weekStart(today())) => realWorkouts().filter(w => weekStart(w.date) === wk).length;
+const dayCount = ws => new Set(ws.map(w => w.date)).size;
+const weekCount = (wk = weekStart(today())) => dayCount(realWorkouts().filter(w => weekStart(w.date) === wk));
+const todayDone = () => realWorkouts().filter(w => w.date === today());
 const durMin = w => { const n = Math.round(((w.endedAt || 0) - (w.startedAt || 0)) / 60000); return n >= 5 && n <= 240 ? n : null; };
 const wSets = w => w.ex.reduce((a, e) => a + e.sets.length, 0);
 const wVol = w => w.ex.reduce((a, e) => a + volOf(e.sets), 0);
@@ -433,6 +436,31 @@ function gem(t, size = 40) {
   </svg>`;
 }
 
+/* ---------- one workout per day and part: fold split sessions together ---------- */
+function mergeSameDay() {
+  const groups = {};
+  for (const w of Object.values(store.workouts)) if (w.status === 'done' && !w.seed) (groups[`${w.date}|${w.part}`] = groups[`${w.date}|${w.part}`] || []).push(w);
+  let changed = false;
+  for (const ws of Object.values(groups)) {
+    if (ws.length < 2) continue;
+    ws.sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
+    const keep = ws[0], merged = new Set(keep.mergedFrom || []);
+    for (const w of ws.slice(1)) {
+      if (!merged.has(w.id)) {
+        keep.ex = [...keep.ex, ...w.ex.map(e => ({ ...e, k: rid() }))];
+        keep.endedAt = Math.max(keep.endedAt || 0, w.endedAt || 0);
+        if (!keep.state && w.state) keep.state = w.state;
+        if (!keep.tpl && w.tpl) keep.tpl = w.tpl;
+        merged.add(w.id);
+      }
+      delete store.workouts[w.id]; removeDoc('w-' + w.id);
+    }
+    keep.mergedFrom = [...merged];
+    saveWorkout(keep); changed = true;
+  }
+  return changed;
+}
+
 /* ---------- workout ---------- */
 let cur = null, armed = null, menuK = null, kp = null;
 function prefill(exId) {
@@ -453,6 +481,13 @@ function startWorkout(part, choice, state) {
   openWorkout(w);
   if (!w.ex.length) setTimeout(() => openLib('add', null, PARTS[part] ? part : 'chest'), 260);
 }
+function resumeToday(w) { // reopen a finished workout: earlier exercises come back collapsed and done
+  w.status = 'active';
+  w.ex = w.ex.map(e => ({ ...e, closed: true, sets: e.sets.map(x => ({ ...x, done: true })) }));
+  delete w.endedAt;
+  saveWorkout(w); openWorkout(w);
+  setTimeout(() => openLib('add', null, PARTS[w.part] ? w.part : 'chest'), 260);
+}
 function openWorkout(w) { cur = w; armed = null; menuK = null; kp = null; $('#pad').hidden = true; $('#wo').hidden = false; document.body.style.overflow = 'hidden'; renderWorkout(); }
 function closeWorkout() { kp = null; $('#pad').hidden = true; $('#pad').innerHTML = ''; cur = null; armed = null; menuK = null; $('#wo').hidden = true; $('#wo').innerHTML = ''; document.body.style.overflow = ''; render(); }
 const doneCount = w => w.ex.reduce((a, e) => a + e.sets.filter(s => s.done).length, 0);
@@ -472,6 +507,10 @@ function tileHTML(e, i, f, ex, p) {
   return `<button class="tile${editing ? ' editing' : ''}" data-act="pad" data-k="${e.k}" data-i="${i}" data-f="${f}" aria-label="第 ${i + 1} 組${f === 'w' ? '重量' : '次數'}"><b class="${v == null ? 'empty' : ''}">${v == null ? (f === 'w' && ex.e === 'bw' ? '0' : '—') : fw(v)}</b><small>${cap}</small></button>`;
 }
 function excHTML(e, idx) {
+  if (e.closed) {
+    const ex = exOf(e.id), done = e.sets.filter(x => x.done);
+    return `<section class="card exc closed" data-k="${e.k}" id="exc-${e.k}"><button class="exc-sum" data-act="reopen" data-k="${e.k}" aria-label="展開${esc(ex.n)}">${exThumb(e.id)}<span style="min-width:0"><b>${done.length ? ic('check') : ''}${esc(ex.n)}</b><small>${done.length ? `${done.length} 組 · ${done.map(x => setTxt(x, ex)).join('、')}` : '跳過'}</small></span><span class="chip">修改</span></button></section>`;
+  }
   const ex = exOf(e.id), last = lastSession(e.id, cur), rec = recFor(e.id, cur);
   const note = store.profile.notes?.[e.id];
   const pr = exercisePRs(e, cur), cmp = compareTxt(e, last);
@@ -501,9 +540,10 @@ function excHTML(e, idx) {
       <button class="btn sm ghost" data-act="rm-set" data-k="${e.k}" ${e.sets.length ? '' : 'disabled'}>刪一組</button>
       ${cmp ? `<span class="cmp ${cmp.cls}">${cmp.t}</span>` : ''}
     </div>
+    <button class="btn block next-ex" data-act="close-ex" data-k="${e.k}">${e.sets.some(x => x.done) ? `${ic('check')}這個動作做完了，下一個` : '先跳過這個動作'} ${ic('right')}</button>
   </section>`;
 }
-const stripHTML = () => `<div class="strip" id="wo-strip">${cur.ex.map(e => { const all = e.sets.length && e.sets.every(s => s.done); return `<button data-act="jump" data-k="${e.k}" aria-label="${esc(exOf(e.id).n)}">${exThumb(e.id, 'thumb round')}${all ? `<span class="ok">${ic('check')}</span>` : ''}</button>`; }).join('')}<button class="add" data-act="add-ex" aria-label="加動作">${ic('plus')}</button></div>`;
+const stripHTML = () => `<div class="strip" id="wo-strip">${cur.ex.map(e => { const all = e.closed || (e.sets.length && e.sets.every(s => s.done)); return `<button data-act="jump" data-k="${e.k}" aria-label="${esc(exOf(e.id).n)}">${exThumb(e.id, 'thumb round')}${all ? `<span class="ok">${ic('check')}</span>` : ''}</button>`; }).join('')}<button class="add" data-act="add-ex" aria-label="加動作">${ic('plus')}</button></div>`;
 const woHeader = () => `<b>${partName(cur.part)}${cur.tpl && tplName(cur.tpl) ? ` · ${esc(tplName(cur.tpl))}` : ''}</b><small>已完成 ${doneCount(cur)} / ${totalCount(cur)} 組</small>`;
 function renderWorkout() {
   const w = cur, n = doneCount(w), t = totalCount(w), st = w.state;
@@ -511,7 +551,7 @@ function renderWorkout() {
     <div class="layer-top">
       <button class="back" data-act="wo-hide" aria-label="先收起來，稍後繼續">${ic('down')}收起</button>
       <div class="ttl" id="wo-ttl">${woHeader()}</div>
-      <button class="done-btn" data-act="finish">完成</button>
+      <span style="min-width:72px"></span>
     </div>
     <div class="wo-prog"><i id="wo-bar" style="width:${t ? n / t * 100 : 0}%"></i></div>
     <div class="layer-scroll${kp ? ' padopen' : ''}" id="wo-scroll">
@@ -521,7 +561,7 @@ function renderWorkout() {
       <button class="add-ex" data-act="add-ex">${ic('plus')}加動作</button>
       <button class="link${armed === 'discard' ? ' arm' : ''}" data-act="discard">${armed === 'discard' ? '確定放棄？這次的紀錄會刪除' : '放棄這次訓練'}</button>
     </div>
-    <div class="layer-bottom"><div><button class="btn primary big block" data-act="finish">完成訓練</button></div></div>`;
+    <div class="layer-bottom"><div><button class="btn big block end-btn" data-act="end-ask">結束今天的訓練</button></div></div>`;
 }
 function rerenderExc(k) {
   const i = cur.ex.findIndex(x => x.k === k), el = $(`#wo .exc[data-k="${k}"]`);
@@ -633,13 +673,23 @@ function openSheet(html) { const sh = $('#sheet'); sh.innerHTML = html; sh.hidde
 function closeSheet() { const sh = $('#sheet'); sh.hidden = true; sh.innerHTML = ''; }
 
 let startSt = null;
-function openStart(part) {
+function openTodayChoice(part, w) {
+  openSheet(`<div class="sheet-card" role="dialog" aria-label="今天已經練過">
+    <div class="grab"></div>
+    <h3>今天已經練過${partName(w.part)}</h3>
+    <p class="muted" style="font-size:14px">要把${PARTS[part] || ALLPARTS[part]}的動作加到今天這次訓練，還是另外記一筆？</p>
+    <button class="btn primary big block" data-act="add-today" data-w="${w.id}">加到今天的${partName(w.part)}</button>
+    <button class="btn big block" data-act="new-today" data-w="${w.id}" data-p="${part}">另外記一筆${partName(part)}</button>
+    <button class="btn block ghost" data-act="sheet-close">取消</button>
+  </div>`);
+}
+function openStart(part, knownState) {
   const tpls = (store.profile.templates || []).filter(t => t.part === part);
   const lw = lastRealOf(part) || lastWorkoutOf(part);
   const lc = store.profile.lastTpl?.[part];
   let choice = lc && (lc === 'blank' || lc === 'last' || tpls.some(t => t.id === lc)) ? lc : (tpls[0]?.id || (lw ? 'last' : 'blank'));
   if (choice === 'last' && !lw) choice = 'blank';
-  startSt = { part, mood: null, tags: [], choice, manage: false };
+  startSt = { part, mood: knownState?.mood || null, tags: knownState?.tags || [], choice, manage: false, known: !!knownState };
   renderStart();
 }
 function renderStart() {
@@ -652,9 +702,9 @@ function renderStart() {
   openSheet(`<div class="sheet-card" role="dialog" aria-label="開始${partName(part)}">
     <div class="grab"></div>
     <div class="sheet-h"><h3>開始${partName(part)}</h3><button class="icon-btn" data-act="sheet-close" aria-label="關閉">${ic('x')}</button></div>
-    <div class="lbl"><span>今天狀態如何？</span><span>可略過</span></div>
+    ${s.known ? `<div class="state-line">今天狀態已記錄：${s.mood ? `${MOODS[s.mood][0]} ${MOODS[s.mood][1]}` : '未填'}${s.tags.map(x => `<span class="chip">${x}</span>`).join('')}</div>` : `<div class="lbl"><span>今天狀態如何？</span><span>可略過</span></div>
     <div class="moods">${Object.entries(MOODS).map(([k, [e, t]]) => `<button class="mood" data-act="st-mood" data-v="${k}" aria-pressed="${s.mood === k}"><span class="e">${e}</span>${t}</button>`).join('')}</div>
-    <div class="tags">${TAGS.map(t => `<button data-act="st-tag" data-v="${t}" aria-pressed="${s.tags.includes(t)}">${t}</button>`).join('')}</div>
+    <div class="tags">${TAGS.map(t => `<button data-act="st-tag" data-v="${t}" aria-pressed="${s.tags.includes(t)}">${t}</button>`).join('')}</div>`}
     <div class="lbl"><span>使用哪一套？</span>${tpls.length ? `<button class="btn sm ghost" data-act="st-manage">${s.manage ? '完成' : '管理模板'}</button>` : ''}</div>
     <div class="opts">
       ${tpls.map(t => s.manage
@@ -870,10 +920,10 @@ function renderHome() {
   const isActive = a && a.part === focus;
   const prs = recentPRs(30).slice(0, 3);
   const mon = t.slice(0, 7), pm = prevMonth(t);
-  const monCount = realWorkouts().filter(w => w.date.startsWith(mon)).length;
-  const pmCount = realWorkouts().filter(w => w.date.startsWith(pm) && +w.date.slice(8) <= +t.slice(8)).length;
+  const monCount = dayCount(realWorkouts().filter(w => w.date.startsWith(mon)));
+  const pmCount = dayCount(realWorkouts().filter(w => w.date.startsWith(pm) && +w.date.slice(8) <= +t.slice(8)));
   const { pts, avg } = bwSeries(), lastBw = pts[pts.length - 1];
-    const fm = new Set(GROUP_MUSCLES[focus]);
+  const fm = new Set(GROUP_MUSCLES[focus]);
   const back = focus === 'back';
   return `<div class="glow"></div><div class="page">
     <header class="head"><div><div class="eyebrow">${+t.slice(5, 7)} 月 ${+t.slice(8, 10)} 日 星期${dow(t)}</div><h1>今天狀態</h1></div></header>
@@ -957,8 +1007,8 @@ function renderHist() {
     ${a ? `<button class="card resume" data-act="resume"><span class="pulse"></span><span><b>${partName(a.part)}進行中</b><small>已完成 ${doneCount(a)} 組</small></span><span class="go">${ic('right')}</span></button>` : ''}
     <section class="card mhero">
       <h3>訓練次數</h3>
-      <span class="huge num">${mws.length}</span>
-      <p>${mo} 月一共練了 ${mws.length} 次、${mws.reduce((s, w) => s + wSets(w), 0)} 組，總量 ${Math.round(mws.reduce((s, w) => s + wVol(w), 0)).toLocaleString()} kg。</p>
+      <span class="huge num">${dayCount(mws)}</span>
+      <p>${mo} 月一共練了 ${dayCount(mws)} 天、${mws.reduce((s, w) => s + wSets(w), 0)} 組，總量 ${Math.round(mws.reduce((s, w) => s + wVol(w), 0)).toLocaleString()} kg。</p>
       <div style="margin-top:10px">${monthBars(ui.calMonth)}</div>
     </section>
     <section class="card cal">
@@ -1036,7 +1086,7 @@ function renderProg() {
     }).join('') + '<p class="muted" style="font-size:12.5px;padding:0 2px">只算打勾完成的組，依動作所屬部位計算。10–20 組是增肌常見的每週建議範圍，只是參考。</p>';
   } else {
     const t = today(), mon = t.slice(0, 7), pm = prevMonth(t);
-    const mc = realWorkouts().filter(w => w.date.startsWith(mon)).length, pc = realWorkouts().filter(w => w.date.startsWith(pm) && +w.date.slice(8) <= +t.slice(8)).length;
+    const mc = dayCount(realWorkouts().filter(w => w.date.startsWith(mon))), pc = dayCount(realWorkouts().filter(w => w.date.startsWith(pm) && +w.date.slice(8) <= +t.slice(8)));
     const from28 = addDays(t, -27);
     const freq = MAIN.concat(['arms', 'core']).map(p => ({ p, n: realWorkouts().filter(w => w.date >= from28 && (w.part === p || w.ex.some(e => exOf(e.id).p === p))).length / 4 }));
     const { pts, avg } = bwSeries();
@@ -1193,10 +1243,38 @@ document.addEventListener('click', e => {
     case 'goto-volume': ui.tab = 'prog'; ui.pTab = 'volume'; render(); window.scrollTo(0, 0); break;
     case 'start': {
       const p = el.dataset.p, a = activeWorkout();
-      if (a) { if (a.part === p) { closeSheet(); openWorkout(a); } else openSwitch(p); }
-      else openStart(p);
+      if (a) { if (a.part === p) { closeSheet(); openWorkout(a); } else openSwitch(p); break; }
+      const td = todayDone(), same = td.find(w => w.part === p);
+      if (same) { closeSheet(); resumeToday(same); toast(`接續今天的${partName(p)}`); break; }
+      if (td.length) { openTodayChoice(p, td[td.length - 1]); break; }
+      openStart(p);
       break;
     }
+    case 'add-today': { const w = store.workouts[el.dataset.w]; closeSheet(); if (w) resumeToday(w); break; }
+    case 'new-today': { const w = store.workouts[el.dataset.w]; closeSheet(); openStart(el.dataset.p, w?.state || null); break; }
+    case 'close-ex': {
+      const i = cur.ex.findIndex(x => x.k === el.dataset.k); if (i < 0) break;
+      if (kp && kp.k === el.dataset.k) closePad();
+      cur.ex[i].closed = true; saveWorkout(cur, 600); renderWorkout();
+      const nxt = cur.ex.findIndex((x, j) => j > i && !x.closed) >= 0 ? cur.ex.find((x, j) => j > i && !x.closed) : cur.ex.find(x => !x.closed);
+      if (nxt) setTimeout(() => $(`#exc-${nxt.k}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 40);
+      else { toast('這些動作都做完了。要再練就加動作，練完就結束今天的訓練'); setTimeout(() => { const sc = $('#wo-scroll'); sc && sc.scrollTo({ top: sc.scrollHeight, behavior: 'smooth' }); }, 40); }
+      break;
+    }
+    case 'reopen': { const e = cur.ex.find(x => x.k === el.dataset.k); if (!e) break; e.closed = false; saveWorkout(cur, 600); rerenderExc(e.k); break; }
+    case 'end-ask': {
+      closePad();
+      const done = cur.ex.filter(e => e.sets.some(x => x.done)), sets = doneCount(cur), left = totalCount(cur) - sets;
+      openSheet(`<div class="sheet-card" role="dialog" aria-label="結束今天的訓練">
+        <div class="grab"></div>
+        <h3>結束今天的訓練？</h3>
+        <p class="muted" style="font-size:14.5px">${sets ? `已完成 ${done.length} 個動作、${sets} 組。` : '還沒有完成任何一組，結束的話這次不會存。'}${sets && left ? `還有 ${left} 組沒打勾，結束後不會存。` : ''}</p>
+        ${sets ? `<button class="btn primary big block" data-act="finish">結束並儲存</button>` : `<button class="btn big block danger" data-act="discard-now">不存，直接離開</button>`}
+        <button class="btn big block" data-act="sheet-close">繼續訓練</button>
+      </div>`);
+      break;
+    }
+    case 'discard-now': { closeSheet(); const id = cur.id; delete store.workouts[id]; removeDoc('w-' + id); closeWorkout(); toast('這次沒有存'); break; }
     case 'st-mood': startSt.mood = startSt.mood === el.dataset.v ? null : el.dataset.v; renderStart(); break;
     case 'st-tag': { const v = el.dataset.v, t = startSt.tags; startSt.tags = t.includes(v) ? t.filter(x => x !== v) : [...t, v]; renderStart(); break; }
     case 'st-choice': startSt.choice = el.dataset.v; renderStart(); break;
@@ -1248,7 +1326,7 @@ document.addEventListener('click', e => {
     case 'done': {
       const ex = cur.ex.find(x => x.k === el.dataset.k), i = +el.dataset.i, s = ex?.sets[i];
       if (!s) break;
-      if (!s.done && !(s.r > 0)) { toast('先填次數再打勾'); $(`#r-${ex.k}-${i}`)?.focus(); break; }
+      if (!s.done && !(s.r > 0)) { toast('先填次數再打勾'); openPad(ex.k, i, 'r'); break; }
       s.done = !s.done; if (!s.done) delete s.f;
       saveWorkout(cur, 900); rerenderExc(ex.k);
       if (s.done) { const pr = exercisePRs(ex, cur).flags[i]; if (pr) toast(`${pr.label}！${exOf(ex.id).n} ${pr.text}`); }
@@ -1289,7 +1367,7 @@ document.addEventListener('click', e => {
       if (armed !== 'discard') { armed = 'discard'; renderWorkout(); break; }
       const id = cur.id; armed = null; delete store.workouts[id]; removeDoc('w-' + id); closeWorkout(); toast('已放棄這次訓練'); break;
     }
-    case 'finish': closePad(); finishWorkout(); break;
+    case 'finish': closeSheet(); closePad(); finishWorkout(); break;
     case 'save-tpl': {
       const w = store.workouts[el.dataset.w]; if (!w) break;
       const used = new Set(store.profile.templates.filter(t => t.part === w.part).map(t => t.name));
@@ -1369,6 +1447,7 @@ document.addEventListener('submit', e => {
   }
 });
 
+mergeSameDay();
 render();
 initCloud();
 })();

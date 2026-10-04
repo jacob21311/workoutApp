@@ -464,4 +464,13 @@ svg.i{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke
 .exrow .thumb{width:44px;height:44px}
 .exrow b{display:block;font-size:14.5px}
 .exrow small{display:block;color:var(--muted);font-size:12.5px}
+/* v5: finished exercises collapse; ending the day is a separate, quieter action */
+.exc.closed{padding:0}
+.exc-sum{display:grid;grid-template-columns:44px 1fr auto;gap:12px;align-items:center;padding:12px 14px;width:100%;text-align:left}
+.exc-sum .thumb{width:44px;height:44px}
+.exc-sum b{display:flex;align-items:center;gap:6px;font-size:15.5px}
+.exc-sum b svg{width:16px;height:16px;color:var(--good);stroke-width:3}
+.exc-sum small{display:block;color:var(--muted);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.next-ex{border-color:rgba(77,163,255,.35);color:var(--accent);background:rgba(77,163,255,.08)}
+.end-btn{background:transparent;border:1.5px solid var(--line-2);color:var(--muted);font-weight:650}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
