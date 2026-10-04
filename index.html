@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>重訓日誌</title>
+<meta name="description" content="記錄重訓、看進步曲線、肌肉恢復與等級的健身紀錄 App。">
+<meta name="theme-color" content="#070A10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="重訓日誌">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<style>body{margin:0;padding-top:env(safe-area-inset-top,0px)}[hidden]{display:none!important}img{max-width:100%}</style>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<main id="app"></main>
+
+<nav class="tabs" aria-label="主選單">
+  <button class="tab" data-act="tab" data-tab="home"><svg class="i" viewBox="0 0 24 24"><path d="M3.5 9.5v5M20.5 9.5v5M6.5 7v10M17.5 7v10M6.5 12h11"/></svg>今天</button>
+  <button class="tab" data-act="tab" data-tab="hist"><svg class="i" viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="2.5"/><path d="M4 9.5h16M8.5 3v4M15.5 3v4"/></svg>紀錄</button>
+  <button class="tab" data-act="tab" data-tab="groups"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="4.5" r="2"/><path d="M7 8.5h10M12 8.5v6M12 14.5l-3 6M12 14.5l3 6M7 8.5l-2 5M17 8.5l2 5"/></svg>肌群</button>
+  <button class="tab" data-act="tab" data-tab="prog"><svg class="i" viewBox="0 0 24 24"><path d="M4 19.5h16"/><path d="M6 15.5l4.2-4.4 3.2 3 5-6.1"/></svg>進步</button>
+</nav>
+
+<div id="wo" class="layer" hidden></div>
+<div id="exp" class="layer" hidden style="z-index:35"></div>
+<div id="pad" hidden></div>
+<div id="sheet" hidden></div>
+<div id="toast" hidden role="status"></div>
+<script src="body-data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
